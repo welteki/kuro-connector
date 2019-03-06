@@ -1,0 +1,7 @@
+# Editor
+.vscode
+
+# Files
+src
+tsconfig.json
+.prettierignore

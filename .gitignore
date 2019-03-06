@@ -1,0 +1,11 @@
+# Editor
+.vscode
+
+# General
+.DS_Store
+
+# Dependency directories
+node_modules/
+
+# Other
+dist
