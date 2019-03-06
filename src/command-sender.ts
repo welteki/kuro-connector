@@ -43,8 +43,7 @@ const buildCommand = (cmd: Command, param: string = ''): Buffer => {
     return buf;
   }
 
-  if (param === 'state' || param === '')
-  {
+  if (param === 'state' || param === '') {
     buf.fill('?', 4, 8);
     return buf;
   }
@@ -55,7 +54,7 @@ const buildCommand = (cmd: Command, param: string = ''): Buffer => {
     );
   } else {
     buf.fill(param, 8 - command.length, 8);
-    return buf
+    return buf;
   }
 };
 
@@ -76,15 +75,19 @@ export class CommandSender extends EventEmitter {
   }
 
   static createSender(port: string): CommandSender {
-    const stream = new SerialPort(port, {
-      // autoOpen: false,
-      baudRate: 9600,
-      dataBits: 8,
-      parity: 'none',
-      stopBits: 1
-    }, (err) => {
-      console.log('port opened');
-    });
+    const stream = new SerialPort(
+      port,
+      {
+        // autoOpen: false,
+        baudRate: 9600,
+        dataBits: 8,
+        parity: 'none',
+        stopBits: 1
+      },
+      err => {
+        console.log('port opened');
+      }
+    );
 
     return new CommandSender(stream);
   }
