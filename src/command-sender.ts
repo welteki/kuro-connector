@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import * as SerialPort from 'serialport';
-import { isNull } from 'util';
+import { CommandQueue } from './command-queue';
 const Parser = SerialPort.parsers.Delimiter;
 
 const DELIMITER = '\r';
@@ -14,13 +14,13 @@ export enum Command {
   'UNMUTE'
 }
 
-interface ICommand {
+interface ICommandDescriptor {
   cmd: string;
   length: number;
   default?: string;
 }
 
-const commands = new Map<Command, ICommand>([
+const commands = new Map<Command, ICommandDescriptor>([
   [Command.POWER, { cmd: 'POWR', length: 1, default: '0' }],
   [Command.SELECT_INPUT, { cmd: 'IAVD', length: 1 }],
   [Command.VOLUME, { cmd: 'VOLM', length: 2 }],
@@ -29,12 +29,12 @@ const commands = new Map<Command, ICommand>([
   [Command.UNMUTE, { cmd: 'MUTE', length: 1, default: '2' }]
 ]);
 
-const buildCommand = (cmd: Command, param: string = ''): Buffer => {
+export const buildCommand = (cmd: Command, param: string = ''): Buffer => {
   const buf = Buffer.alloc(9, 'ascii')
     .fill('0')
     .fill(DELIMITER, 8);
 
-  let command: ICommand | undefined = commands.get(cmd);
+  let command: ICommandDescriptor | undefined = commands.get(cmd);
   if (!command) throw new Error(`Invalid command: ${cmd}`);
   buf.fill(command.cmd, 0, 4);
 
@@ -61,40 +61,60 @@ const buildCommand = (cmd: Command, param: string = ''): Buffer => {
 export class CommandSender extends EventEmitter {
   private _stream: SerialPort;
   private _parser: SerialPort.parsers.Delimiter;
+  private _commandQueue: CommandQueue<Buffer>;
+  private _currentCommand: any;
+  timeout: number;
 
   constructor(stream: SerialPort) {
     super();
-    stream.on('error', this._onError.bind(this));
-    this._stream = stream;
-
     let parser = new Parser({ delimiter: DELIMITER });
-    parser.on('data', this._onResponse.bind(this));
+
+    this._commandQueue = new CommandQueue();
+    this._stream = stream;
     this._parser = parser;
+
+    stream.on('error', this._onError.bind(this));
+    parser.on('data', this._onResponse.bind(this));
 
     stream.pipe(parser);
   }
 
-  static createSender(port: string): CommandSender {
-    const stream = new SerialPort(
-      port,
-      {
-        // autoOpen: false,
-        baudRate: 9600,
-        dataBits: 8,
-        parity: 'none',
-        stopBits: 1
-      },
-      err => {
-        console.log('port opened');
-      }
-    );
+  static createSender(port: string, timeout?: number): CommandSender {
+    const stream = new SerialPort(port, {
+      autoOpen: false,
+      baudRate: 9600,
+      dataBits: 8,
+      parity: 'none',
+      stopBits: 1
+    });
 
     return new CommandSender(stream);
   }
 
-  sendCommand(cmd: Command, param?: 'state' | string): void {
-    this._stream.write(buildCommand(cmd, param), err => {
-      if (err) this.emit('error', err);
+  async sendCommand(
+    cmd: Command,
+    param: 'state' | string = 'state'
+  ): Promise<Buffer> {
+    if (!this._stream.isOpen)
+      throw new Error('Open serial stream to start sending commands');
+
+    return this._commandQueue.add(() => {
+      let command = buildCommand(cmd, param);
+      this._stream.write(command, err => {
+        if (err) throw err;
+      });
+    });
+  }
+
+  open(callback?: (err?: Error) => void): void {
+    this._stream.open(err => {
+      if (err) {
+        this.emit('error', err);
+        if (callback) callback(err);
+      } else {
+        this.emit('open');
+        if (callback) callback();
+      }
     });
   }
 
@@ -103,8 +123,18 @@ export class CommandSender extends EventEmitter {
   }
 
   private _onResponse(res: Buffer): void {
+    let { current } = this._commandQueue;
+    if (!current) return;
+
     let response = res.toString();
-    this.emit('data', response);
+
+    if (response === 'ERR') {
+      let err = Error(`Command failed`);
+      current.reject(err);
+      return;
+    }
+
+    current.resolve(res);
   }
 
   private _onError(err: Error): void {
