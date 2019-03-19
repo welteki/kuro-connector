@@ -1,7 +1,9 @@
 import { EventEmitter } from 'events';
 import * as SerialPort from 'serialport';
+import * as Debug from 'debug';
 import { CommandQueue } from './command-queue';
 const Parser = SerialPort.parsers.Delimiter;
+const debug = Debug(`kuro:sender`);
 
 const DELIMITER = '\r';
 
@@ -58,13 +60,27 @@ export const buildCommand = (cmd: Command, param: string = ''): Buffer => {
   }
 };
 
-export class CommandSender extends EventEmitter {
-  private _stream: SerialPort;
-  private _parser: SerialPort.parsers.Delimiter;
-  private _commandQueue: CommandQueue<Buffer>;
+export interface SenderOptions {
+  commandTimeout?: number;
+  pollInterval?: number;
+}
 
-  constructor(stream: SerialPort) {
+export class CommandSender extends EventEmitter {
+  private readonly _stream: SerialPort;
+  private readonly _parser: SerialPort.parsers.Delimiter;
+  private readonly _commandQueue: CommandQueue<Buffer>;
+  private readonly _options: SenderOptions;
+  private _connected: boolean = false;
+  private _pollTimeout: NodeJS.Timeout;
+
+  constructor(stream: SerialPort, options?: SenderOptions) {
     super();
+    this._options = {
+      commandTimeout: 50,
+      pollInterval: 6000,
+      ...options
+    };
+
     let parser = new Parser({ delimiter: DELIMITER });
 
     this._commandQueue = new CommandQueue();
@@ -72,12 +88,13 @@ export class CommandSender extends EventEmitter {
     this._parser = parser;
 
     stream.on('error', this._onError.bind(this));
+    stream.on('open', this._startPolling.bind(this));
     parser.on('data', this._onResponse.bind(this));
 
     stream.pipe(parser);
   }
 
-  static createSender(port: string, timeout?: number): CommandSender {
+  static createSender(port: string, options?: SenderOptions): CommandSender {
     const stream = new SerialPort(port, {
       autoOpen: false,
       baudRate: 9600,
@@ -86,38 +103,97 @@ export class CommandSender extends EventEmitter {
       stopBits: 1
     });
 
-    return new CommandSender(stream);
+    return new CommandSender(stream, options);
   }
 
   async sendCommand(
     cmd: Command,
-    param: 'state' | string = 'state'
+    param: 'state' | string = ''
   ): Promise<Buffer> {
-    if (!this._stream.isOpen)
-      throw new Error('Open serial stream to start sending commands');
+    return this._commandQueue.add(
+      () => {
+        this._write(cmd, param);
+      },
+      { timeout: this._options.commandTimeout }
+    );
+  }
 
-    return this._commandQueue.add(() => {
+  connect(callback?: (err?: Error) => void): void {
+    debug('Opening connection');
+    this._stream.open(callback);
+  }
+
+  end(): void {
+    debug('Closing connection');
+    this._stream.close();
+    this.emit('end');
+  }
+
+  get connected(): boolean {
+    return this._connected;
+  }
+
+  private _write(cmd: Command, param: string): void {
+    debug(`sender.send command:${Command[cmd]} param:${param}`);
+    try {
+      if (!this._stream.isOpen)
+        throw new Error('Open serial stream to start sending commands');
+
       let command = buildCommand(cmd, param);
       this._stream.write(command, err => {
-        if (err) throw err;
+        if (err) {
+          throw err;
+        }
       });
-    });
+    } catch (err) {
+      debug(`sender.send command error`);
+      throw err;
+    }
   }
 
-  open(callback?: (err?: Error) => void): void {
-    this._stream.open(err => {
-      if (err) {
-        this.emit('error', err);
-        if (callback) callback(err);
+  private async _pollConnection(): Promise<void> {
+    debug(`sender.poll poll started`);
+    const { pollInterval, commandTimeout } = this._options;
+
+    try {
+      await this._commandQueue.add(
+        () => {
+          this._write(Command.POWER, 'state');
+        },
+        {
+          priority: 1,
+          timeout: pollInterval! - commandTimeout!
+        }
+      );
+      debug(`sender.poll poll finished`);
+      this._setConnectionStatus(true);
+    } catch (err) {
+      debug(`sender.poll poll finished`);
+      this._setConnectionStatus(false);
+    }
+  }
+
+  private _startPolling() {
+    debug('Starting connection poll');
+
+    const poll = () => {
+      if (this._stream.isOpen) {
+        this._pollConnection();
+        this._pollTimeout = setTimeout(poll, this._options.pollInterval!);
       } else {
-        this.emit('open');
-        if (callback) callback();
+        clearTimeout(this._pollTimeout);
       }
-    });
+    };
+
+    poll();
   }
 
-  close(): void {
-    this._stream.close();
+  private _setConnectionStatus(status: boolean) {
+    debug(`Updating connection status to ${status}`);
+
+    if (status && !this.connected) this.emit('connect');
+    if (!status && this.connected) this.emit('close');
+    this._connected = status;
   }
 
   private _onResponse(res: Buffer): void {
@@ -127,11 +203,13 @@ export class CommandSender extends EventEmitter {
     let response = res.toString();
 
     if (response === 'ERR') {
+      debug('sender.send command failed');
       let err = Error(`Command failed`);
       current.reject(err);
       return;
     }
 
+    debug(`sender.send command succes, res:${res}`);
     current.resolve(res);
   }
 
