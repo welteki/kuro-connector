@@ -62,8 +62,6 @@ export class CommandSender extends EventEmitter {
   private _stream: SerialPort;
   private _parser: SerialPort.parsers.Delimiter;
   private _commandQueue: CommandQueue<Buffer>;
-  private _currentCommand: any;
-  timeout: number;
 
   constructor(stream: SerialPort) {
     super();
