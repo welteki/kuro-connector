@@ -32,6 +32,13 @@
     "iot"
   ],
   "author": "Han Verstraete",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/welteki/kuro-connector"
+  },
+  "bugs": {
+    "url": "https://github.com/welteki/kuro-connector/issues"
+  },
   "license": "MIT",
   "dependencies": {
     "debug": "^4.1.1",
