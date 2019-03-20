@@ -61,10 +61,24 @@ export const buildCommand = (cmd: Command, param: string = ''): Buffer => {
 };
 
 export interface SenderOptions {
+  /**
+   * Command timeout interval.
+   *
+   * @default 1000
+   */
   commandTimeout?: number;
+
+  /**
+   * Connecton poll interval.
+   *
+   * @default 6000
+   */
   pollInterval?: number;
 }
 
+/**
+ * Wraps serial connection to the device.
+ */
 export class CommandSender extends EventEmitter {
   private readonly _stream: SerialPort;
   private readonly _parser: SerialPort.parsers.Delimiter;
@@ -76,7 +90,7 @@ export class CommandSender extends EventEmitter {
   constructor(stream: SerialPort, options?: SenderOptions) {
     super();
     this._options = {
-      commandTimeout: 50,
+      commandTimeout: 1000,
       pollInterval: 6000,
       ...options
     };
@@ -94,6 +108,12 @@ export class CommandSender extends EventEmitter {
     stream.pipe(parser);
   }
 
+  /**
+   * Creates new command sender.
+   *
+   * @param port - Path to serialport
+   * @param options - Sender options
+   */
   static createSender(port: string, options?: SenderOptions): CommandSender {
     const stream = new SerialPort(port, {
       autoOpen: false,
@@ -106,6 +126,12 @@ export class CommandSender extends EventEmitter {
     return new CommandSender(stream, options);
   }
 
+  /**
+   * Sends a command.
+   *
+   * @param cmd - The command
+   * @param param - The command parameter
+   */
   async sendCommand(
     cmd: Command,
     param: 'state' | string = ''
@@ -118,17 +144,28 @@ export class CommandSender extends EventEmitter {
     );
   }
 
+  /**
+   * Opens the serial connection.
+   *
+   * @param callback - Called after the connection is opened
+   */
   connect(callback?: (err?: Error) => void): void {
     debug('Opening connection');
     this._stream.open(callback);
   }
 
+  /**
+   * Ends the serial connection.
+   */
   end(): void {
     debug('Closing connection');
     this._stream.close();
     this.emit('end');
   }
 
+  /**
+   * Connection status.
+   */
   get connected(): boolean {
     return this._connected;
   }
